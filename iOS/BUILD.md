@@ -14,7 +14,6 @@
 ```bash
 git clone https://github.com/thenewnet/zalo-swift-re.git
 cd zalo-swift-re
-git checkout ios-multi-account
 
 brew install xcodegen
 

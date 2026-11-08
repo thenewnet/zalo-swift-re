@@ -1,4 +1,7 @@
-import AppKit
+#if os(iOS)
+import UIKit
+#endif
+import Foundation
 import Foundation
 
 // Native macOS notifications + notification settings. Bridged to `HostScripts/notification-adapter.js`
@@ -207,9 +210,12 @@ extension ZaloEngine {
     }
 
     func openSystemNotificationSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
-            NSWorkspace.shared.open(url)
-        }
+        #if os(macOS)
+        let link = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        #else
+        let link = UIApplication.openNotificationSettingsURLString
+        #endif
+        if let url = URL(string: link) { PlatformServices.open(url) }
     }
 
     private func applyAuthorization(_ status: NativeNotifier.Authorization) {

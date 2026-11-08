@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 
 // Message context-menu actions — Chia sẻ, Copy, Thu hồi, Xóa chỉ ở phía tôi, Ghim tin nhắn, Đánh dấu tin nhắn — bridged to
 // `HostScripts/message-actions-adapter.js` (`window.__zaloMsgActions`), which runs the official services and says which items each message
@@ -153,8 +153,7 @@ extension ZaloEngine {
     func copyText(_ text: String, in conversationId: String) {
         Task {
             guard await copyAllowed(in: conversationId) else { return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            PlatformServices.copy(text)
             CardActionCenter.shared.show("Đã sao chép", in: conversationId)
         }
     }
@@ -173,12 +172,11 @@ extension ZaloEngine {
             if data == nil, !message.isE2EE, let url, url.scheme == "https" {
                 data = try? await MediaLoader.shared.data(for: url)
             }
-            guard let data, let image = NSImage(data: data) else {
+            guard let data, let image = PlatformImage(data: data) else {
                 CardActionCenter.shared.show("Không sao chép được hình ảnh. Hãy thử lại.", in: conversation)
                 return
             }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.writeObjects([image])
+            PlatformServices.copy(image)
             CardActionCenter.shared.show("Đã sao chép", in: conversation)
         }
     }

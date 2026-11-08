@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import CommonCrypto
 import CryptoKit
 import os
@@ -60,7 +60,7 @@ final class ZaloMainProcess {
         self.platform = platform
         // main `stop()`: the call helper does not outlive the app.
         terminationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            forName: PlatformServices.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.callBridge?.shutdown() }
         }
     }
@@ -395,7 +395,7 @@ final class ZaloMainProcess {
 
         bridge.handle("badge-count") { [weak self] args in
             let count = args.int(0) ?? 0
-            NSApp.dockTile.badgeLabel = count <= 0 ? nil : (count > 5 ? "5+" : "\(count)")
+            PlatformServices.setDockBadge(count)
             self?.onEvent?(.badge(count))
             return nil
         }
@@ -404,8 +404,8 @@ final class ZaloMainProcess {
         bridge.handle("__shell__") { args in
             let path = args.string(1) ?? ""
             switch args.string(0) {
-            case "showItemInFolder": NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-            default: return NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            case "showItemInFolder": PlatformServices.reveal(URL(fileURLWithPath: path))
+            default: return PlatformServices.openFile(URL(fileURLWithPath: path))
             }
             return true
         }

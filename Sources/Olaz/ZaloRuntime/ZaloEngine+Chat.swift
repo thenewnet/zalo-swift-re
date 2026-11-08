@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+import Foundation
 
 // Chat + phone→PC transfer, bridged to `HostScripts/chat-adapter.js` (`window.__zaloChat`).
 // Contract: ChatModels.swift. All actions run through the official client's own services.
@@ -78,14 +78,14 @@ extension ZaloEngine {
     }
 
     /// The PNG of an official reaction icon (`pc-dist/emoji/…`, read from the install's asar), cached by path.
-    func reactionImage(_ path: String) -> NSImage? {
+    func reactionImage(_ path: String) -> PlatformImage? {
         guard !path.isEmpty else { return nil }
         if let cached = Self.reactionImages.object(forKey: path as NSString) { return cached }
-        guard let data = host?.install.asar.read("pc-dist/" + path), let image = NSImage(data: data) else { return nil }
+        guard let data = host?.install.asar.read("pc-dist/" + path), let image = PlatformImage(data: data) else { return nil }
         Self.reactionImages.setObject(image, forKey: path as NSString)
         return image
     }
-    private static let reactionImages = NSCache<NSString, NSImage>()
+    private static let reactionImages = NSCache<NSString, PlatformImage>()
 
     func markRead(_ id: String) { callChat("markRead", id) }
 

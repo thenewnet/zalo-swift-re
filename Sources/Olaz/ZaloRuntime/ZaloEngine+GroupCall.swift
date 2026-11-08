@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import Foundation
 
 // Group calls: the participant picker. The official renderer opens its GROUP_CALL modal (invisible here) for two

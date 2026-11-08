@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -166,7 +166,7 @@ struct GroupAvatarImage: Equatable {
     static let tooHeavyText = "Đã có lỗi xảy ra. Vui lòng sử dụng ảnh khác hoặc thử lại sau"  // STR_TOAST_UPLOAD_FAILED
     static let unreadableText = "Không đọc được ảnh này. Hãy chọn một ảnh khác."
 
-    var image: NSImage? { NSImage(data: jpeg) }
+    var image: PlatformImage? { PlatformImage(data: jpeg) }
     var base64: String { jpeg.base64EncodedString() }
 
     /// Reads `url` (EXIF orientation applied), crops the centre square and encodes it, or says why it cannot be used.

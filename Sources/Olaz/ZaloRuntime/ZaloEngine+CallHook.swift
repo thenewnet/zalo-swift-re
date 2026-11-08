@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import Foundation
 @preconcurrency import UserNotifications
 
@@ -208,7 +208,7 @@ extension ZaloEngine {
             if let picker = GroupCallPicker(json: json) {
                 next.picker = picker
                 // Like the official request handler (`$zwindow.focus()`): the helper asked while its own window may be in front.
-                NSApp?.activate()
+                PlatformServices.activateApp()
             }
         case "pickerClosed":
             if next.picker?.id == json["token"] as? String { next.picker = nil }
@@ -243,7 +243,7 @@ extension ZaloEngine {
     /// The native helper shows the ringing window. This adds a banner in the app and, when the app is in the
     /// background, a macOS notification (the official renderer shows nothing for incoming calls itself).
     private func announceIncomingCall(_ incoming: CallState.Incoming) {
-        guard NativeNotifier.shared.isAvailable, !(NSApp?.isActive ?? true) else { return }
+        guard NativeNotifier.shared.isAvailable, !PlatformServices.appIsActive else { return }
         let content = UNMutableNotificationContent()
         content.title = "Cuộc gọi đến"
         content.body = "\(incoming.name) đang gọi cho bạn"

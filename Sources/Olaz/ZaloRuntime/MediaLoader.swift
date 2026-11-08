@@ -1,12 +1,16 @@
 import Foundation
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import ImageIO
 import Network
 import CoreServices
 
 /// `NSImage` is not `Sendable`; images handed out by the loader are immutable after creation.
 struct SendableImage: @unchecked Sendable {
-    let image: NSImage
+    let image: PlatformImage
 }
 
 /// Loads Zalo CDN media (avatars, photos, stickers, voice, files).
@@ -127,8 +131,8 @@ actor MediaLoader {
     // MARK: Decoded-image memory cache (synchronous access for views)
 
     private final class CachedImage: @unchecked Sendable {
-        let image: NSImage
-        init(_ image: NSImage) { self.image = image }
+        let image: PlatformImage
+        init(_ image: PlatformImage) { self.image = image }
     }
 
     /// NSCache is thread-safe but not annotated `Sendable`.
@@ -158,11 +162,11 @@ actor MediaLoader {
     private static func imageKey(_ url: URL, _ pixels: Int) -> String { "\(url.absoluteString)#\(pixels)" }
 
     /// Already-decoded image, if any; lets views render without a placeholder flash.
-    nonisolated static func cachedImage(for url: URL, maxPixelSize: CGFloat) -> NSImage? {
+    nonisolated static func cachedImage(for url: URL, maxPixelSize: CGFloat) -> PlatformImage? {
         memory.object(forKey: imageKey(url, pixelBucket(maxPixelSize)) as NSString)?.image
     }
 
-    nonisolated static func cachedAnimatedImage(for url: URL) -> NSImage? {
+    nonisolated static func cachedAnimatedImage(for url: URL) -> PlatformImage? {
         memory.object(forKey: imageKey(url, 0) as NSString)?.image
     }
 
@@ -302,15 +306,15 @@ actor MediaLoader {
         for key in failures.keys where key.hasPrefix(prefix) { failures[key] = nil }
     }
 
-    nonisolated static func decodeAnimated(_ data: Data) -> NSImage? {
+    nonisolated static func decodeAnimated(_ data: Data) -> PlatformImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 1 else { return nil }
-        return NSImage(data: data)
+        return PlatformImage(data: data)
     }
 
     /// Decodes `data`, downsampling so the longest side is at most `maxPixelSize`. A photo stored rotated (EXIF orientation)
     /// is turned upright either way: the full-size path would leave it sideways.
-    nonisolated static func decode(_ data: Data, maxPixelSize: Int) -> NSImage? {
+    nonisolated static func decode(_ data: Data, maxPixelSize: Int) -> PlatformImage? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions),
               CGImageSourceGetCount(source) > 0 else { return nil }
@@ -335,7 +339,7 @@ actor MediaLoader {
             cgImage = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
         }
         guard let cgImage else { return nil }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        return PlatformImage.make(cgImage: cgImage)
     }
 
     // MARK: Raw data

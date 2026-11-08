@@ -30,3 +30,34 @@ jobs:
           exit $status
       - name: Test
         run: swift test 2>&1 | tail -60
+
+  ios:
+    name: iOS build (simulator, no runtime)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          latest=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+          xcodebuild -version
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          OLAZ_TEAM_ID="" OLAZ_BUNDLE_ID=app.olaz.mobile.ci xcodegen generate
+      - name: Build
+        run: |
+          set +e
+          xcodebuild -project OlazMobile.xcodeproj -scheme OlazMobile -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build > ios-build.log 2>&1
+          status=$?
+          grep -E "error:" ios-build.log | sort -u | head -200
+          tail -5 ios-build.log
+          exit $status
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: ios-build.log

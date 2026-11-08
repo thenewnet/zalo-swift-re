@@ -1,4 +1,7 @@
+#if os(macOS)
 import AppKit
+#endif
+import Foundation
 import CoreGraphics
 
 /// The official screenshot tool, `ZaloCap` (a Qt app in Zalo.app's `ZaloHelper.app`), driven the way Zalo PC's main process
@@ -12,6 +15,35 @@ import CoreGraphics
 /// leave the shot on the clipboard, "Chia sẻ" (`cap:forwardScrs`) hands over an image path, the OCR "share text" (`cap:forwardTextScrs`)
 /// its text. Main's "without Zalo" mode hides the windows first and restores them when the tool is done (`cap:cancelScrs` /
 /// `cap:quitAction` / exit). OCR is not offered (`zalo:ocrAvailability` answers disabled).
+#if !os(macOS)
+/// No screenshot tool on iOS (Zalo's `ZaloCap` helper is a macOS binary): every request reports a failure.
+@MainActor
+final class ScreenCapture {
+    enum Outcome {
+        /// "Gửi": the shot (a PNG written from the clipboard) for the conversation the capture started from.
+        case send(URL, conversationId: String)
+        /// "Gửi vào Cloud của tôi".
+        case sendToMe(URL, conversationId: String)
+        /// "Chia sẻ": the user picks the conversations.
+        case share(URL, conversationId: String)
+        /// "Chia sẻ" of the recognised text.
+        case shareText(String, conversationId: String)
+        /// The tool reported it may not record the screen (System Settings ▸ Privacy ▸ Screen Recording).
+        case noPermission
+        /// Something failed before the tool could run (helper missing, clipboard empty…), with the text to show.
+        case failed(String, conversationId: String)
+    }
+    var onOutcome: ((Outcome) -> Void)?
+    var log: (String) -> Void = { _ in }
+    var isCapturing: Bool { false }
+
+    func start(in conversationId: String, withOlaz: Bool) {
+        onOutcome?(.failed("Chụp màn hình chưa hỗ trợ trên iPhone. Hãy chụp bằng iPhone rồi gửi ảnh.", conversationId: conversationId))
+    }
+
+    func shutdown() {}
+}
+#else
 @MainActor
 final class ScreenCapture {
     enum Outcome {
@@ -291,3 +323,5 @@ final class ScreenCapture {
         }
     }
 }
+
+#endif

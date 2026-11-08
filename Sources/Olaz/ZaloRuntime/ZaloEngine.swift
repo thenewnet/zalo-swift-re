@@ -148,6 +148,8 @@ final class ZaloEngine {
 
     /// Set by `AccountsManager`: which account slot this engine is (notifications carry it).
     @ObservationIgnored var accountID: UUID?
+    /// Per-account notification switch (multi-account settings); the official client's own settings still apply.
+    @ObservationIgnored var notificationsEnabledForAccount = true
 
     init(scope: AccountScope = .legacy) {
         self.scope = scope
@@ -285,6 +287,7 @@ final class ZaloEngine {
     /// Stops this account's runtime (both windows, sockets) but keeps its sign-in: `start()` brings it back without a QR.
     /// Used to put idle accounts to sleep when too many run at once (each one is a full Zalo renderer).
     func shutdown() {
+        NativeNotifier.shared.detach(engine: self)
         loginTimeout?.cancel()
         mainProcess?.stopSharedWorker()
         host?.shutdown()
@@ -301,6 +304,8 @@ final class ZaloEngine {
     }
 
     var isRunning: Bool { host != nil }
+    /// Whether this account's UI is the one on screen (set through `setBackground`).
+    @ObservationIgnored private(set) var isOnScreen = true
 
     /// Fresh QR (the official page regenerates on load).
     func refreshQR() {
@@ -470,6 +475,7 @@ final class ZaloEngine {
 
     /// Tells the official client whether this account is on screen; off screen it refreshes its list less often.
     func setBackground(_ background: Bool) {
+        isOnScreen = !background
         host?.evaluateQuietly("window.__olazSetBackground && window.__olazSetBackground(\(background))")
     }
 

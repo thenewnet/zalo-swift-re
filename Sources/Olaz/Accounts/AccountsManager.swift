@@ -3,10 +3,12 @@ import Observation
 
 /// Several Zalo accounts signed in at once, each a full `ZaloEngine` on its own `AccountScope`.
 ///
-/// Every engine runs a complete copy of the official renderer (main window + hidden shared-worker window), so memory
-/// is the limit, not the protocol. At most `maxLiveAccounts` engines run; the least recently used one beyond that is
-/// put to sleep (`ZaloEngine.shutdown`, sign-in kept) and wakes when the user switches back to it. Engines that are
-/// not on screen are told so (`setBackground`) and refresh their lists less often.
+/// Realtime for every account: by default **all** accounts stay connected at the same time (their own WebSocket,
+/// their own notifications), whether on screen or not. Engines that are not on screen are told so (`setBackground`):
+/// the official client then treats them like a background window, notifies for them, and the list adapter refreshes
+/// less often. Every engine is a full copy of the official renderer, so on memory pressure the accounts that are not on
+/// screen are put to sleep (`ZaloEngine.shutdown`, sign-in kept) and woken again shortly after. `maxLiveAccounts`
+/// (0 = no limit) lets the user cap how many run at once on a small device.
 @MainActor
 @Observable
 final class AccountsManager {
@@ -22,16 +24,18 @@ final class AccountsManager {
     private(set) var accounts: [Account] = []
     private(set) var engines: [UUID: ZaloEngine] = [:]
     private(set) var activeID: UUID?
-    /// Accounts whose engine may run at the same time (the active one included).
-    var maxLiveAccounts: Int = AccountsManager.defaultMaxLive {
+    /// Accounts whose engine may run at the same time (the active one included); 0 = all of them (realtime for all).
+    var maxLiveAccounts: Int = 0 {
         didSet { UserDefaults.standard.set(maxLiveAccounts, forKey: Keys.maxLive); enforceLiveLimit() }
     }
 
-    static var defaultMaxLive: Int {
-        // ~1 GB of RAM per live renderer pair is a safe budget; never fewer than 2.
-        let gb = Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)
-        return max(2, min(5, gb / 2))
-    }
+    /// Accounts put to sleep by a memory warning, woken again after `wakeDelay`.
+    @ObservationIgnored private var sleptForMemory: Set<UUID> = []
+    @ObservationIgnored private var wakeTask: Task<Void, Never>?
+    @ObservationIgnored private var memoryWarnings: [Date] = []
+    private static let wakeDelay: Duration = .seconds(90)
+
+    private var liveLimit: Int { maxLiveAccounts > 0 ? maxLiveAccounts : Int.max }
 
     private enum Keys {
         static let accounts = "olaz.accounts.v1"
@@ -67,8 +71,13 @@ final class AccountsManager {
     /// Starts the active account (and the other recently used ones, up to the live limit).
     func start() {
         if accounts.isEmpty { addAccount() ; return }
+        NativeNotifier.shared.onOpenAccount = { [weak self] engine in
+            guard let self, let id = engine.accountID else { return }
+            self.activate(id)
+        }
         let order = accounts.sorted { $0.lastUsed > $1.lastUsed }.map(\.id)
-        for id in order.prefix(maxLiveAccounts) { ensureEngine(id).start() }
+        for id in order.prefix(liveLimit) { ensureEngine(id).start() }
+        observeUnread()
         if let activeID { activate(activeID) }
     }
 
@@ -89,6 +98,7 @@ final class AccountsManager {
         let engine = ensureEngine(id)
         if !engine.isRunning { engine.start() }
         for (other, e) in engines { e.setBackground(other != id) }
+        NativeNotifier.shared.foregroundEngine = engine
         enforceLiveLimit()
     }
 
@@ -112,6 +122,7 @@ final class AccountsManager {
     func setNotifications(_ id: UUID, enabled: Bool) {
         guard let i = accounts.firstIndex(where: { $0.id == id }) else { return }
         accounts[i].notificationsEnabled = enabled
+        engines[id]?.notificationsEnabledForAccount = enabled
         save()
     }
 
@@ -130,12 +141,49 @@ final class AccountsManager {
 
     func appWillEnterForeground() {
         if let activeID { engines[activeID]?.setBackground(false) }
+        // Accounts that went to sleep (memory) or whose connection iOS dropped come back now.
+        for account in accounts.sorted(by: { $0.lastUsed > $1.lastUsed }).prefix(liveLimit) {
+            let engine = ensureEngine(account.id)
+            if !engine.isRunning { engine.start() }
+        }
+        sleptForMemory.removeAll()
     }
 
-    /// The system is short on memory: put every account but the active one to sleep.
+    /// The system is short on memory: put the accounts that are not on screen to sleep, and wake them again a little
+    /// later so they stay realtime. Three warnings within ten minutes keep them asleep until the app comes back.
     func handleMemoryWarning() {
+        let now = Date()
+        memoryWarnings = memoryWarnings.filter { now.timeIntervalSince($0) < 600 } + [now]
         for (id, engine) in engines where id != activeID && engine.isRunning {
             engine.shutdown()
+            sleptForMemory.insert(id)
+        }
+        wakeTask?.cancel()
+        guard memoryWarnings.count < 3 else { return }
+        wakeTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.wakeDelay)
+            guard !Task.isCancelled, let self else { return }
+            // One at a time, so waking does not itself cause the next warning.
+            for id in self.sleptForMemory {
+                guard !Task.isCancelled else { return }
+                self.engines[id]?.start()
+                self.engines[id]?.setBackground(true)
+                self.sleptForMemory.remove(id)
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
+    }
+
+    /// Unread over all accounts on the app icon.
+    private func observeUnread() {
+        withObservationTracking {
+            _ = totalUnread
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                NativeNotifier.shared.setBadge(self.totalUnread)
+                self.observeUnread()
+            }
         }
     }
 
@@ -154,6 +202,8 @@ final class AccountsManager {
         if let engine = engines[id] { return engine }
         let engine = ZaloEngine(scope: AccountScope(id: id))
         engine.accountID = id
+        engine.notificationsEnabledForAccount = account(for: id)?.notificationsEnabled ?? true
+        engine.setBackground(id != activeID)
         engines[id] = engine
         observeProfile(id)
         return engine
@@ -173,8 +223,8 @@ final class AccountsManager {
 
     private func enforceLiveLimit() {
         let live = accounts.filter { isLive($0.id) }.sorted { $0.lastUsed > $1.lastUsed }
-        guard live.count > maxLiveAccounts else { return }
-        for account in live.dropFirst(maxLiveAccounts) where account.id != activeID {
+        guard live.count > liveLimit else { return }
+        for account in live.dropFirst(liveLimit) where account.id != activeID {
             engines[account.id]?.shutdown()
         }
     }

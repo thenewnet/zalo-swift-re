@@ -400,7 +400,7 @@ final class ZaloMainProcess {
             return nil
         }
         // `_noti_*` (Electron Notification, `$znoti`) → UNUserNotificationCenter (NativeNotifier.swift).
-        NativeNotifier.installIPC(on: bridge)
+        NativeNotifier.installIPC(on: bridge, scope: platform.scope)
         bridge.handle("__shell__") { args in
             let path = args.string(1) ?? ""
             switch args.string(0) {

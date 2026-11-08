@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main, ios-multi-account]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS build + tests
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          xcodebuild -version
+          swift --version
+      - name: Build
+        run: swift build 2>&1 | tee build.log | grep -E "error:|warning: .*(deprecated|unreachable)|Compiling|Build complete" | grep -v "^Compiling" || true; test ${PIPESTATUS[0]} -eq 0
+      - name: Errors
+        if: failure()
+        run: grep -n "error:" build.log | head -100
+      - name: Test
+        run: swift test 2>&1 | tail -60

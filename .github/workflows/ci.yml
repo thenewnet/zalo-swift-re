@@ -18,9 +18,12 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Build
-        run: swift build 2>&1 | tee build.log | grep -E "error:|warning: .*(deprecated|unreachable)|Compiling|Build complete" | grep -v "^Compiling" || true; test ${PIPESTATUS[0]} -eq 0
-      - name: Errors
-        if: failure()
-        run: grep -n "error:" build.log | head -100
+        run: |
+          set +e
+          swift build > build.log 2>&1
+          status=$?
+          grep -E "error:" build.log | sort -u | head -150
+          tail -5 build.log
+          exit $status
       - name: Test
         run: swift test 2>&1 | tail -60

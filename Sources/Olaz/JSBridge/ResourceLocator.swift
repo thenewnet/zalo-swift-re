@@ -37,8 +37,10 @@ enum ResourceLocator {
         }
         #if !OLAZ_IOS   // the iOS Xcode target has no Bundle.module
         // Development / `swift test` fallback.
-        if let res = Bundle.module.resourceURL {
-            let url = res.appendingPathComponent(subdirectory, isDirectory: true)
+        // A flat bundle (what `swift build` emits) keeps its files at the bundle root, which `resourceURL` may not
+        // point at, so both are tried.
+        for base in [Bundle.module.resourceURL, Bundle.module.bundleURL].compactMap({ $0 }) {
+            let url = base.appendingPathComponent(subdirectory, isDirectory: true)
             if fm.fileExists(atPath: url.path) { return url }
         }
         #endif

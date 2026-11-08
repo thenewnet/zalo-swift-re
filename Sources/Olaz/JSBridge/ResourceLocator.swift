@@ -35,11 +35,13 @@ enum ResourceLocator {
                 return url
             }
         }
+        #if SWIFT_PACKAGE
         // Development / `swift test` fallback.
         if let res = Bundle.module.resourceURL {
             let url = res.appendingPathComponent(subdirectory, isDirectory: true)
             if fm.fileExists(atPath: url.path) { return url }
         }
+        #endif
         return nil
     }
 

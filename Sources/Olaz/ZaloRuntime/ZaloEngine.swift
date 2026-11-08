@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WebKit
 import os
 
 private let engineLog = Logger(subsystem: "app.olaz", category: "engine")
@@ -304,6 +305,12 @@ final class ZaloEngine {
     }
 
     var isRunning: Bool { host != nil }
+
+    /// The renderer web views of this account (main window, hidden shared-worker window). The iOS app keeps them in its
+    /// window, invisible, so WebKit never treats them as detached and keeps their timers and sockets running.
+    var rendererViews: [WKWebView] {
+        [host?.webView, mainProcess?.workerHost?.webView].compactMap { $0 }
+    }
     /// Whether this account's UI is the one on screen (set through `setBackground`).
     @ObservationIgnored private(set) var isOnScreen = true
 

@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import Foundation
 import Foundation
 @preconcurrency import UserNotifications
@@ -267,8 +270,10 @@ extension ZaloEngine {
     /// Brings the native call window to the front (ringing / in-call).
     func showCallWindow() {
         // Our own child only — never another ZaloCall (e.g. the official Zalo's).
+        #if os(macOS)
         guard let pid = call.nativePID else { return }
         NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
+        #endif
     }
 }
 

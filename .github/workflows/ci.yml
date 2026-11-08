@@ -35,6 +35,9 @@ jobs:
           status=$?
           grep -E "✘|recorded an issue|XCTAssert|failed \(" test.log | head -60
           tail -3 test.log
+          echo "--- resource bundles"
+          find .build -name "libsignal-protocol.js" -not -path "*/checkouts/*" | head
+          find .build -maxdepth 4 -name "*.bundle" | head
           exit $status
 
   ios:

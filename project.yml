@@ -24,6 +24,8 @@ targets:
           - "JSBridge/**"
           - "Accounts/**"
           - "Models.swift"
+          - "Theme.swift"
+          - "Views/CardActions.swift"
         excludes:
           - "ZaloRuntime/EngineProbe.swift"
       - path: iOS/Sources

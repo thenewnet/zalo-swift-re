@@ -235,8 +235,10 @@ extension ZaloEngine {
     /// Sign-out: drop everything zCloud kept (state, thumbnails, staged previews of the previous account).
     func resetCloud() {
         cloud = CloudState()
+        #if os(macOS)
         CloudThumbnails.shared.reset()
         CloudFiles.purgeAll()
+        #endif
     }
 
     // MARK: State

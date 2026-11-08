@@ -29,7 +29,13 @@ jobs:
           tail -5 build.log
           exit $status
       - name: Test
-        run: swift test 2>&1 | tail -60
+        run: |
+          set +e
+          swift test > test.log 2>&1
+          status=$?
+          grep -E "✘|recorded an issue|XCTAssert|failed \(" test.log | head -60
+          tail -3 test.log
+          exit $status
 
   ios:
     name: iOS build (simulator, no runtime)

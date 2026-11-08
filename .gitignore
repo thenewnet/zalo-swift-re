@@ -50,5 +50,6 @@ Assets/avatar-default.png
 Sources/Olaz/Resources/sg_emo.json
 
 # iOS build: official Zalo runtime extracted locally by scripts/fetch-zalo-runtime.sh (never committed)
-iOS/ZaloRuntime/
+iOS/ZaloRuntime/*
+!iOS/ZaloRuntime/README.md
 *.xcodeproj/

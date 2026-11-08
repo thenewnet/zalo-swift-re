@@ -126,6 +126,7 @@ extension ZaloEngine {
         }
         EngineLog.shared.write("chat merge conv=\(convId.prefix(4))… reset=\(reset) in=\(incoming.count) removed=\(removed.count) total=\(list.count) hasMore=\(chat["hasMore"] ?? "-")")
         if messages[convId] != list { messages[convId] = list }
+        evictOldConversations(keeping: convId)
         notePollMessages(incoming)
         if let hasMore = chat["hasMore"] as? Bool, hasMoreHistory[convId] != hasMore { hasMoreHistory[convId] = hasMore }
         if chat["grew"] as? Bool == true { historyTicks[convId, default: 0] += 1 }
@@ -133,6 +134,22 @@ extension ZaloEngine {
             clearTyping(convId)
         }
     }
+
+    /// Big accounts open many long conversations: keep the messages of only the last few in memory. Opening an evicted
+    /// conversation again gets a full list from the adapter (`reset`), so nothing is lost.
+    private func evictOldConversations(keeping convId: String) {
+        recentChatIds.removeAll { $0 == convId }
+        recentChatIds.append(convId)
+        while recentChatIds.count > Self.maxCachedConversations {
+            let old = recentChatIds.removeFirst()
+            guard old != openConversationId else { recentChatIds.append(old); break }
+            messages[old] = nil
+            hasMoreHistory[old] = nil
+            historyTicks[old] = nil
+        }
+    }
+
+    static let maxCachedConversations = 6
 
     private func showTyping(_ name: String, in convId: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)

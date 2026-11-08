@@ -70,6 +70,10 @@ final class ZaloEngine {
 
     private(set) var phase: Phase = .starting
     private(set) var conversations: [ConversationSummary] = []
+    /// Every conversation by id; `conversations` is its sorted view. Updated from deltas (`state-adapter.js`).
+    @ObservationIgnored private var conversationIndex: [String: ConversationSummary] = [:]
+    /// A full list arriving in several batches is applied once its last batch (`done`) is in.
+    @ObservationIgnored private var conversationResetInFlight = false
     private(set) var profile: Profile?
     /// Why the session ended, shown on the login screen (e.g. kicked by another PC login).
     private(set) var signOutNotice: String?
@@ -84,6 +88,8 @@ final class ZaloEngine {
     var failedDrafts = FailedDraftStore()
     /// Messages per conversation, oldest first.
     internal(set) var messages: [String: [ChatMessage]] = [:]
+    /// Conversations whose messages are kept in memory, least recently used first (ZaloEngine+Chat.swift).
+    @ObservationIgnored internal var recentChatIds: [String] = []
     /// Whether older history can be loaded per conversation.
     internal(set) var hasMoreHistory: [String: Bool] = [:]
     /// Bumped when an older page arrived whose messages are all hidden cards (nothing else in `messages` changes), so the list can ask for the next page.
@@ -136,6 +142,16 @@ final class ZaloEngine {
     internal(set) var pins: [String: PinnedList] = [:]
     /// Message actions in flight ("conv|msg|action"): a second click while one runs is ignored.
     @ObservationIgnored internal var messageActionsBusy: Set<String> = []
+
+    /// The account this engine runs (its own cookies, WebKit store, data folder). `.legacy` = Olaz's single account.
+    @ObservationIgnored let scope: AccountScope
+
+    /// Set by `AccountsManager`: which account slot this engine is (notifications carry it).
+    @ObservationIgnored var accountID: UUID?
+
+    init(scope: AccountScope = .legacy) {
+        self.scope = scope
+    }
 
     @ObservationIgnored internal var host: OfficialClientHost?
     /// Dedupes/throttles `resolveMedia` (ZaloEngine+Media.swift).
@@ -221,11 +237,11 @@ final class ZaloEngine {
     private func boot(_ install: OfficialZaloInstall.Info) {
         clientVersion = install.version
 
-        let platform = ZaloPlatform(appVersion: install.version)
+        let platform = ZaloPlatform(appVersion: install.version, scope: scope)
         let mainProcess = ZaloMainProcess(platform: platform)
         let ua = OfficialClientHost.userAgent(clientType: platform.identity.clientType,
                                               clientVersion: platform.identity.clientVersion)
-        let host = OfficialClientHost(install: install, userAgent: ua) { bridge in
+        let host = OfficialClientHost(install: install, userAgent: ua, scope: scope) { bridge in
             BridgeImplementation.install(on: bridge, platform: platform, mainProcess: mainProcess)
         }
         mainProcess.host = host
@@ -266,6 +282,26 @@ final class ZaloEngine {
         mainProcess.start()
     }
 
+    /// Stops this account's runtime (both windows, sockets) but keeps its sign-in: `start()` brings it back without a QR.
+    /// Used to put idle accounts to sleep when too many run at once (each one is a full Zalo renderer).
+    func shutdown() {
+        loginTimeout?.cancel()
+        mainProcess?.stopSharedWorker()
+        host?.shutdown()
+        host = nil
+        mainProcess = nil
+        platform = nil
+        scope.saveCookiesNow()
+        recentChatIds.removeAll()
+        messages.removeAll()
+        hasMoreHistory.removeAll()
+        historyTicks.removeAll()
+        openConversationId = nil
+        phase = .starting
+    }
+
+    var isRunning: Bool { host != nil }
+
     /// Fresh QR (the official page regenerates on load).
     func refreshQR() {
         guard let host, let mainProcess else { return }
@@ -274,8 +310,14 @@ final class ZaloEngine {
     }
 
     /// Clears the session cookies and local client data, then shows a fresh QR.
+    /// Forgets the session locally without showing a new QR (the account is being removed).
+    func logOutQuietly() {
+        mainProcess?.clearCookies()
+        mainProcess?.resetAccountState()
+    }
+
     func logOut() {
-        ZaloMainProcess.clearCookies()
+        mainProcess?.clearCookies()
         mainProcess?.resetAccountState()
         profile = nil
         resetConversationActions()
@@ -386,9 +428,13 @@ final class ZaloEngine {
             handleTransferAvailability(state: state)
         case "main" where state["chat"] != nil || state["typing"] != nil:
             handleChat(state: state)
+        case "main" where state["conversationsDelta"] != nil:
+            applyConversationsDelta(state["conversationsDelta"] as? [String: Any] ?? [:])
         case "main" where state["conversations"] != nil:
             let rows = state["conversations"] as? [[String: Any]] ?? []
-            conversations = rows.compactMap(Self.conversation).sorted(by: Self.listOrder)
+            let list = rows.compactMap(Self.conversation)
+            conversationIndex = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
+            conversations = list.sorted(by: Self.listOrder)
         case "main":
             if let user = state["user"] as? [String: Any], let id = user["userId"] as? String, !id.isEmpty {
                 profile = Profile(
@@ -401,6 +447,30 @@ final class ZaloEngine {
         default:
             break
         }
+    }
+
+    /// Applies one `conversationsDelta` {reset, done, upsert, remove}. Only changed rows cross the bridge, so a large
+    /// account costs a sort of the index when something changed instead of a full re-parse every tick.
+    private func applyConversationsDelta(_ delta: [String: Any]) {
+        let reset = delta["reset"] as? Bool ?? false
+        let done = delta["done"] as? Bool ?? true
+        if reset {
+            conversationIndex.removeAll(keepingCapacity: true)
+            conversationResetInFlight = true
+        }
+        for row in delta["upsert"] as? [[String: Any]] ?? [] {
+            if let summary = Self.conversation(row) { conversationIndex[summary.id] = summary }
+        }
+        for id in delta["remove"] as? [String] ?? [] { conversationIndex[id] = nil }
+        if conversationResetInFlight && !done { return }
+        conversationResetInFlight = false
+        let sorted = conversationIndex.values.sorted(by: Self.listOrder)
+        if sorted != conversations { conversations = sorted }
+    }
+
+    /// Tells the official client whether this account is on screen; off screen it refreshes its list less often.
+    func setBackground(_ background: Bool) {
+        host?.evaluateQuietly("window.__olazSetBackground && window.__olazSetBackground(\(background))")
     }
 
     /// The QR login long-polls (`qr-id.zaloapp.com/polling/qr/*`) pass through

@@ -68,7 +68,7 @@ final class ZaloMainProcess {
     // MARK: Session / navigation
 
     var hasSession: Bool {
-        HTTPCookieStorage.shared.cookies(for: Self.authDomain)?.contains { $0.name == "zpw_sek" && !$0.value.isEmpty } ?? false
+        platform.scope.cookies.cookies(for: Self.authDomain)?.contains { $0.name == "zpw_sek" && !$0.value.isEmpty } ?? false
     }
 
     /// Query string main appends to pages (`j6F3.qt`, spec §2.4).
@@ -103,7 +103,7 @@ final class ZaloMainProcess {
         let platform = self.platform
         let ua = OfficialClientHost.userAgent(clientType: platform.identity.clientType,
                                               clientVersion: platform.identity.clientVersion)
-        let worker = OfficialClientHost(install: host.install, userAgent: ua) { [weak self] bridge in
+        let worker = OfficialClientHost(install: host.install, userAgent: ua, scope: platform.scope) { [weak self] bridge in
             guard let self else { return }
             BridgeImplementation.install(on: bridge, platform: platform, mainProcess: self)
         }
@@ -264,25 +264,28 @@ final class ZaloMainProcess {
         }
 
         // Cookies (spec §2.1)
+        let scope = platform.scope
         bridge.handle("_electron_set-app-cookie") { args in
             guard let value = args.string(0) else { return nil }
             // Replace any previous session cookie (host-only or domain) so exactly one is sent.
-            for cookie in HTTPCookieStorage.shared.cookies ?? [] where cookie.name == "zpw_sek" {
-                HTTPCookieStorage.shared.deleteCookie(cookie)
+            for cookie in scope.cookies.cookies ?? [] where cookie.name == "zpw_sek" {
+                scope.cookies.deleteCookie(cookie)
             }
             for domain in Self.sessionCookieDomains {
-                Self.setCookie(name: "zpw_sek", value: value, domain: domain, days: 7, httpOnly: true)
+                Self.setCookie(name: "zpw_sek", value: value, domain: domain, days: 7, httpOnly: true, storage: scope.cookies)
             }
+            scope.saveCookiesNow()
             return nil
         }
         bridge.handle("_electron_set-cookie") { args in
             guard let name = args.string(0), let value = args.string(1) else { return nil }
             let domain = args.string(3) ?? URL(string: args.string(2) ?? "")?.host() ?? "zalo.me"
-            Self.setCookie(name: name, value: value, domain: domain, days: 365, httpOnly: false)
+            Self.setCookie(name: name, value: value, domain: domain, days: 365, httpOnly: false, storage: scope.cookies)
+            scope.scheduleCookieSave()
             return nil
         }
-        bridge.handle("_electron_clear-cookie") { _ in
-            Self.clearCookies()
+        bridge.handle("_electron_clear-cookie") { [weak self] _ in
+            self?.clearCookies()
             return nil
         }
 
@@ -475,11 +478,13 @@ final class ZaloMainProcess {
         if let cookie = HTTPCookie(properties: properties) { storage.setCookie(cookie) }
     }
 
-    static func clearCookies() {
-        let storage = HTTPCookieStorage.shared
+    /// Clears this account's Zalo cookies (sign-out).
+    func clearCookies() {
+        let storage = platform.scope.cookies
         for cookie in storage.cookies ?? [] where Self.isZaloDomain(cookie.domain) {
             storage.deleteCookie(cookie)
         }
+        platform.scope.saveCookiesNow()
     }
 
     static func isZaloDomain(_ domain: String) -> Bool {
@@ -581,7 +586,7 @@ struct KeychainCipher {
     }
 
     private func rootKey(_ identifier: String, create: Bool) throws -> Data {
-        let account = "zprotocol.\(identifier.lowercased())"
+        let account = platform.scope.keychainPrefix + "zprotocol.\(identifier.lowercased())"
         switch Keychain.read(account: account) {
         case .found(let existing): return existing
         // A key that exists but cannot be read now (locked keychain, denied access) must never be shadowed by a fresh one:
@@ -646,6 +651,23 @@ enum Keychain {
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(add as CFDictionary, nil)
         guard status == errSecSuccess else { throw ZaloBridge.BridgeError(message: "Keychain write failed (\(status))") }
+    }
+
+    /// Removes this account's secrets (items whose account name starts with `prefix`, e.g. `acct.<id>.`).
+    static func deleteAll(prefix: String) {
+        guard !prefix.isEmpty else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitAll, kSecReturnAttributes as String: true,
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]] else { return }
+        for item in items {
+            guard let account = item[kSecAttrAccount as String] as? String, account.hasPrefix(prefix) else { continue }
+            SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                           kSecAttrAccount as String: account] as CFDictionary)
+        }
     }
 
     /// Removes every secret, the legacy service's too: `read` would otherwise fall back to them and copy them over again.

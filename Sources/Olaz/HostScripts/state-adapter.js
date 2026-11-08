@@ -137,7 +137,7 @@
         if (convTimer) return;
         const regs = () => diRegistrations(req);
         const pick = (pred) => { for (const r of regs()) { const i = r.instance; if (i && typeof i === 'object') { try { if (pred(i)) return i; } catch {} } } return null; };
-        let modules = null, lastKey = '', requestedProfiles = new Set();
+        let modules = null, requestedProfiles = new Set();
         const loadModules = async () => {
           const io = pick((i) => typeof i.getFriendManagerModule === 'function');
           if (!io) return null;
@@ -228,32 +228,88 @@
           const text = safe(() => previewText(p), '') || '';
           return { text: String(text).slice(0, 200), ts: Number(p.messageTime || p.sendDttm || p.ts || 0), fromMe: !!p.isMe || String(p.fromUid) === '0', type: p.messageType || p.msgType || '' };
         };
-        const publish = async () => {
-          beginTick();
-          if (!modules) { modules = await loadModules().catch(() => null); if (!modules || !modules.convs) { modules = null; return; } }
-          const m = modules;
-          const missing = [];
-          const rows = [];
-          for (const [id, c] of m.convs.data) {
-            const isGroup = !!c.isGroup;
-            const name = safe(() => (isGroup ? m.groups.getDName(id) : m.friends.getDName(id)), '');
-            if (!name && !isGroup) missing.push(id);
-            const u = safe(() => m.unread.getUnreadByConvIdSync(id), null);
-            rows.push({
-              id: String(id), isGroup, name: name || '',
-              avatar: safe(() => (isGroup ? m.groups.getAvatarGroup(id) : m.friends.getAvatar(id)), '') || '',
-              pinned: !!c.pinned, members: isGroup ? safe(() => m.groups.getTotalMember(id), 0) : 0,
-              unread: (u && (u.smsUnreadCount || 0)) || 0,
-              preview: previewOf(m, id),
-            });
-          }
-          // Unknown 1-1 names: ask the official friend module to fetch profiles once.
-          const toFetch = missing.filter((id) => !requestedProfiles.has(id));
-          if (toFetch.length) { toFetch.forEach((id) => requestedProfiles.add(id)); safe(() => m.friends.getProfileFriendByIds(toFetch), null); }
-          const key = JSON.stringify(rows);
-          if (key !== lastKey) { lastKey = key; post({ page: 'main', conversations: rows }); }
+        // Large accounts (thousands of conversations) must not stall the renderer or the Swift main thread:
+        //  * rows are built in slices of SLICE, yielding to the event loop between slices;
+        //  * the preview text (official formatter, the costly part) is cached per conversation and only
+        //    recomputed when the preview item changes (message time / type / sender);
+        //  * only changed rows are posted (`conversationsDelta` {reset, upsert, remove}), the first post
+        //    (and any resync Swift asks for) in batches of BATCH rows;
+        //  * when this account is not on screen (`window.__olazBackground`, set by Swift) the list is
+        //    refreshed every BACKGROUND_MS instead of FOREGROUND_MS.
+        const SLICE = 250, BATCH = 400, FOREGROUND_MS = 1500, BACKGROUND_MS = 15000;
+        const sent = new Map();          // id -> row key last posted
+        const previewCache = new Map();  // id -> {sig, value}
+        let needsReset = true, publishing = false, lastRun = 0;
+        const yieldNow = () => new Promise((r) => setTimeout(r, 0));
+        const cachedPreview = (m, id) => {
+          const p = safe(() => m.preview.data.get(id), null);
+          if (!p) { previewCache.delete(id); return null; }
+          const sig = [p.messageTime, p.sendDttm, p.ts, p.messageType, p.msgType, p.fromUid, p.msgId, p.cliMsgId].join('|');
+          const hit = previewCache.get(id);
+          if (hit && hit.sig === sig) return hit.value;
+          const value = previewOf(m, id);
+          previewCache.set(id, { sig, value });
+          return value;
         };
-        convTimer = setInterval(() => { publish().catch((e) => diag('conversations publish failed: ' + e)); }, 1500);
+        const postDelta = (reset, upsert, remove) => {
+          if (reset) {
+            if (!upsert.length) { post({ page: 'main', conversationsDelta: { reset: true, done: true, upsert: [], remove: [] } }); return; }
+            for (let i = 0; i < upsert.length; i += BATCH) {
+              post({ page: 'main', conversationsDelta: { reset: i === 0, done: i + BATCH >= upsert.length, upsert: upsert.slice(i, i + BATCH), remove: [] } });
+            }
+            return;
+          }
+          for (let i = 0; i < Math.max(upsert.length, 1); i += BATCH) {
+            post({ page: 'main', conversationsDelta: { reset: false, done: true, upsert: upsert.slice(i, i + BATCH), remove: i === 0 ? remove : [] } });
+          }
+        };
+        const publish = async () => {
+          if (publishing) return;
+          const now = Date.now();
+          if (window.__olazBackground && !needsReset && now - lastRun < BACKGROUND_MS) return;
+          publishing = true; lastRun = now;
+          try {
+            beginTick();
+            if (!modules) { modules = await loadModules().catch(() => null); if (!modules || !modules.convs) { modules = null; return; } }
+            const m = modules;
+            const missing = [];
+            const upsert = [];
+            const seen = new Set();
+            const reset = needsReset;
+            let n = 0;
+            for (const [id, c] of Array.from(m.convs.data)) {
+              const key0 = String(id);
+              seen.add(key0);
+              const isGroup = !!c.isGroup;
+              const name = safe(() => (isGroup ? m.groups.getDName(id) : m.friends.getDName(id)), '');
+              if (!name && !isGroup) missing.push(id);
+              const u = safe(() => m.unread.getUnreadByConvIdSync(id), null);
+              const row = {
+                id: key0, isGroup, name: name || '',
+                avatar: safe(() => (isGroup ? m.groups.getAvatarGroup(id) : m.friends.getAvatar(id)), '') || '',
+                pinned: !!c.pinned, members: isGroup ? safe(() => m.groups.getTotalMember(id), 0) : 0,
+                unread: (u && (u.smsUnreadCount || 0)) || 0,
+                preview: cachedPreview(m, id),
+              };
+              const key = JSON.stringify(row);
+              if (reset || sent.get(key0) !== key) { sent.set(key0, key); upsert.push(row); }
+              if (++n % SLICE === 0) await yieldNow();
+            }
+            const remove = [];
+            for (const id of Array.from(sent.keys())) if (!seen.has(id)) { sent.delete(id); previewCache.delete(id); remove.push(id); }
+            // Unknown 1-1 names: ask the official friend module to fetch profiles once.
+            const toFetch = missing.filter((id) => !requestedProfiles.has(id));
+            if (toFetch.length) { toFetch.forEach((id) => requestedProfiles.add(id)); safe(() => m.friends.getProfileFriendByIds(toFetch), null); }
+            if (reset || upsert.length || remove.length) postDelta(reset, upsert, remove);
+            needsReset = false;
+          } finally {
+            publishing = false;
+          }
+        };
+        // Swift asks for a full list again (e.g. after it dropped its copy to save memory).
+        window.__olazConversationsResync = () => { needsReset = true; sent.clear(); publish().catch(() => {}); };
+        window.__olazSetBackground = (bg) => { window.__olazBackground = !!bg; if (!bg) publish().catch(() => {}); };
+        convTimer = setInterval(() => { publish().catch((e) => diag('conversations publish failed: ' + e)); }, FOREGROUND_MS);
         publish().catch(() => {});
       };
       if (!tryAttach()) { const t = setInterval(() => { if (tryAttach()) clearInterval(t); }, 500); }

@@ -19,13 +19,21 @@ final class ZaloPlatform {
 
     let appVersion: String
     let identity = ClientIdentity()
+    /// The account this platform serves (data folder, cookies, WebKit store, Keychain namespace).
+    let scope: AccountScope
     let userData: URL
     let fileManager = FileManager.default
 
-    init(appVersion: String, userData: URL = ZaloPlatform.defaultUserData) {
+    init(appVersion: String, scope: AccountScope = .legacy) {
         self.appVersion = appVersion
-        self.userData = userData
+        self.scope = scope
+        self.userData = scope.userData
         try? fileManager.createDirectory(at: userData, withIntermediateDirectories: true)
+    }
+
+    /// Single-account platform on a given folder (tests).
+    convenience init(appVersion: String, userData: URL) {
+        self.init(appVersion: appVersion, scope: AccountScope(userData: userData))
     }
 
     nonisolated static var defaultUserData: URL {
@@ -35,7 +43,7 @@ final class ZaloPlatform {
 
     /// Stable per-install device id (the official client calls it `imei`).
     var imei: String {
-        let key = "olaz.imei"
+        let key = scope.imeiDefaultsKey
         if let existing = UserDefaults.standard.string(forKey: key) { return existing }
         let fresh = UUID().uuidString.lowercased()
         UserDefaults.standard.set(fresh, forKey: key)
@@ -51,15 +59,26 @@ final class ZaloPlatform {
         case "temp":
             return fm.temporaryDirectory.appendingPathComponent("Olaz").path
         case "home":
+            #if os(macOS)
             return fm.homeDirectoryForCurrentUser.path
+            #else
+            return NSHomeDirectory()
+            #endif
         case "downloads":
+            #if os(macOS)
             return fm.urls(for: .downloadsDirectory, in: .userDomainMask)[0].path
+            #else
+            // iOS has no shared Downloads folder: keep files in the account's own folder (shown in the Files app).
+            return userData.appendingPathComponent("Downloads", isDirectory: true).path
+            #endif
         case "documents":
             return fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
-        case "desktop":
-            return fm.urls(for: .desktopDirectory, in: .userDomainMask)[0].path
-        case "pictures":
-            return fm.urls(for: .picturesDirectory, in: .userDomainMask)[0].path
+        case "desktop", "pictures":
+            #if os(macOS)
+            return fm.urls(for: name == "desktop" ? .desktopDirectory : .picturesDirectory, in: .userDomainMask)[0].path
+            #else
+            return fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+            #endif
         case "logs":
             return userData.appendingPathComponent("logs").path
         default:

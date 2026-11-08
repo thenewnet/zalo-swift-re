@@ -66,15 +66,16 @@ final class OfficialClientHost: NSObject {
         "ZaloPC-darwin-\(clientType)v\(clientVersion)"
     }
 
-    init(install: OfficialZaloInstall.Info, userAgent ua: String, configureBridge: (ZaloBridge) -> Void) {
+    init(install: OfficialZaloInstall.Info, userAgent ua: String, scope: AccountScope = .legacy,
+         configureBridge: (ZaloBridge) -> Void) {
         self.install = install
-        network = NetworkProxy(userAgent: ua)
+        network = NetworkProxy(userAgent: ua, cookieStorage: scope.cookies)
         schemeHandler = AsarSchemeHandler(asar: install.asar, root: "pc-dist")
 
         configureBridge(bridge)
 
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = scope.makeDataStore()
         config.preferences.inactiveSchedulingPolicy = .none
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.setURLSchemeHandler(schemeHandler, forURLScheme: Self.scheme)
@@ -141,6 +142,11 @@ final class OfficialClientHost: NSObject {
 
     func evaluate(_ script: String) async -> Any? {
         try? await webView.callAsyncJavaScript(script, contentWorld: .page)
+    }
+
+    /// Fire-and-forget evaluation for small state pushes (no result, errors ignored).
+    func evaluateQuietly(_ script: String) {
+        webView.evaluateJavaScript(script, in: nil, in: .page) { _ in }
     }
 
     /// Runs `script`, answering the open panel it opens (a file input clicked synchronously in it) with `urls`: the page

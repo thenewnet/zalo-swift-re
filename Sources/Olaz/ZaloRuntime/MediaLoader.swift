@@ -497,6 +497,9 @@ actor MediaLoader {
     /// `ZaloDownloads`) and its caches.
     nonisolated(unsafe) static var allowedLocalRoots: [String] = [
         ZaloPlatform.defaultUserData.resolvingSymlinksInPath().path,
+        // Multi-account data folders (`Olaz/Accounts/<id>/ZaloData`).
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Olaz/Accounts", isDirectory: true).resolvingSymlinksInPath().path,
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Olaz", isDirectory: true).resolvingSymlinksInPath().path,
     ]

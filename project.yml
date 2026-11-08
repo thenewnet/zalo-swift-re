@@ -4,7 +4,7 @@ name: OlazMobile
 options:
   bundleIdPrefix: app.olaz
   deploymentTarget:
-    iOS: "18.0"
+    iOS: "18.4"
   createIntermediateGroups: true
 settings:
   base:

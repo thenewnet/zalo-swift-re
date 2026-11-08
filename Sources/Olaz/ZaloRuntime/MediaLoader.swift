@@ -797,6 +797,7 @@ actor MediaLoader {
 
     /// Marks a downloaded file with `com.apple.quarantine` so Gatekeeper vets it when opened.
     nonisolated static func applyQuarantine(to file: URL, origin: URL) {
+        #if os(macOS)
         var values = URLResourceValues()
         values.quarantineProperties = [
             kLSQuarantineAgentNameKey as String: "Olaz",
@@ -805,6 +806,7 @@ actor MediaLoader {
         ]
         var target = file
         try? target.setResourceValues(values)
+        #endif
     }
 
     private nonisolated static func syncToDisk(_ file: URL) {

@@ -12,8 +12,8 @@
 ## Các bước
 
 ```bash
-git clone https://github.com/thenewnet/zalo-swift-re.git
-cd zalo-swift-re
+git clone https://github.com/thenewnet/multiple-acc-zalo.git
+cd multiple-acc-zalo
 
 brew install xcodegen
 

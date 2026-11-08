@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 
 // MARK: - Chat contract
 //
@@ -648,7 +647,7 @@ enum WebLink {
     }
 
     @MainActor static func open(_ url: URL?) {
-        if let safe = sanitized(url) { NSWorkspace.shared.open(safe) }
+        if let safe = sanitized(url) { PlatformServices.open(safe) }
     }
 }
 

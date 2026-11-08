@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Network
 import WebKit
 import UniformTypeIdentifiers
@@ -37,7 +41,9 @@ final class OfficialClientHost: NSObject {
         get { stateHandler.sink }
         set { stateHandler.sink = newValue }
     }
+    #if os(macOS)
     private var debugWindow: NSWindow?
+    #endif
     private let pathMonitor = NWPathMonitor()
     private(set) var currentPage: Page?
 
@@ -66,15 +72,16 @@ final class OfficialClientHost: NSObject {
         "ZaloPC-darwin-\(clientType)v\(clientVersion)"
     }
 
-    init(install: OfficialZaloInstall.Info, userAgent ua: String, configureBridge: (ZaloBridge) -> Void) {
+    init(install: OfficialZaloInstall.Info, userAgent ua: String, scope: AccountScope = .legacy,
+         configureBridge: (ZaloBridge) -> Void) {
         self.install = install
-        network = NetworkProxy(userAgent: ua)
+        network = NetworkProxy(userAgent: ua, cookieStorage: scope.cookies)
         schemeHandler = AsarSchemeHandler(asar: install.asar, root: "pc-dist")
 
         configureBridge(bridge)
 
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = scope.makeDataStore()
         config.preferences.inactiveSchedulingPolicy = .none
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.setURLSchemeHandler(schemeHandler, forURLScheme: Self.scheme)
@@ -88,7 +95,7 @@ final class OfficialClientHost: NSObject {
             content.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         }
 
-        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 720), configuration: config)
+        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1100, height: 720), configuration: config)
         webView.customUserAgent = ua
         webView.isInspectable = true
         super.init()
@@ -143,6 +150,11 @@ final class OfficialClientHost: NSObject {
         try? await webView.callAsyncJavaScript(script, contentWorld: .page)
     }
 
+    /// Fire-and-forget evaluation for small state pushes (no result, errors ignored).
+    func evaluateQuietly(_ script: String) {
+        webView.evaluateJavaScript(script, in: nil, in: .page) { _ in }
+    }
+
     /// Runs `script`, answering the open panel it opens (a file input clicked synchronously in it) with `urls`: the page
     /// then holds disk-backed `File`s for exactly the files the user picked, like a browser's `<input type=file>`.
     /// One pick at a time: the next waits until WebKit took this one's files (or the script ended without asking for them).
@@ -176,6 +188,7 @@ final class OfficialClientHost: NSObject {
 
     /// Shows the renderer's own DOM in a separate window (development aid only).
     func showDebugWindow() {
+        #if os(macOS)
         if debugWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
                                   styleMask: [.titled, .closable, .resizable, .miniaturizable],
@@ -187,6 +200,8 @@ final class OfficialClientHost: NSObject {
             debugWindow = window
         }
         debugWindow?.makeKeyAndOrderFront(nil)
+
+        #endif
     }
 }
 
@@ -223,7 +238,7 @@ extension OfficialClientHost: WKNavigationDelegate {
         guard let url = action.request.url else { return .cancel }
         if url.scheme == Self.scheme || url.scheme == "about" || url.scheme == "blob" || url.scheme == "data" { return .allow }
         if action.targetFrame?.isMainFrame == false { return .allow }
-        if ["http", "https"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }
+        if ["http", "https"].contains(url.scheme ?? "") { PlatformServices.open(url) }
         return .cancel
     }
 

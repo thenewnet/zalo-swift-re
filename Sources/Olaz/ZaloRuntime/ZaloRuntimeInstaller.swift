@@ -41,8 +41,14 @@ enum ZaloRuntime {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Olaz/ZaloRuntime", isDirectory: true)
     }
-    /// The runtime in use.
-    static var current: URL { root.appendingPathComponent("current", isDirectory: true) }
+    /// The runtime in use. On iOS it ships inside the app (`iOS/ZaloRuntime`, made by scripts/fetch-zalo-runtime.sh).
+    static var current: URL {
+        #if os(macOS)
+        root.appendingPathComponent("current", isDirectory: true)
+        #else
+        Bundle.main.url(forResource: "ZaloRuntime", withExtension: nil) ?? root.appendingPathComponent("current", isDirectory: true)
+        #endif
+    }
     /// A verified upgrade, swapped in by `prepareForLaunch`.
     static var pending: URL { root.appendingPathComponent("pending", isDirectory: true) }
     /// Downloads, mounts and half-copied folders; emptied at every launch.
@@ -54,9 +60,14 @@ enum ZaloRuntime {
 
     static func isComplete(_ runtime: URL) -> Bool {
         let fm = FileManager.default
-        return fm.fileExists(atPath: runtime.appendingPathComponent("Contents/Info.plist").path)
+        let base = fm.fileExists(atPath: runtime.appendingPathComponent("Contents/Info.plist").path)
             && fm.fileExists(atPath: runtime.appendingPathComponent("Contents/Resources/app.asar").path)
-            && fm.isExecutableFile(atPath: helper("ZaloCall", in: runtime).path)
+        #if os(macOS)
+        return base && fm.isExecutableFile(atPath: helper("ZaloCall", in: runtime).path)
+        #else
+        // No call helper on iOS (calls are not supported there).
+        return base
+        #endif
     }
 
     /// `CFBundleShortVersionString` of a Zalo.app or runtime folder.
@@ -138,6 +149,9 @@ struct ZaloRuntimeInstaller: Sendable {
 
     /// Installs into `destination`, replacing what is there; returns the Zalo version installed.
     func install(into destination: URL) async throws -> String {
+        #if !os(macOS)
+        throw Failure(message: "Thiếu bộ chạy Zalo trong ứng dụng. Trên máy Mac, chạy scripts/fetch-zalo-runtime.sh rồi build lại.")
+        #else
         progress(.looking)
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         if let local = Self.installedZalo(version: release.version) {
@@ -156,7 +170,10 @@ struct ZaloRuntimeInstaller: Sendable {
             try await fetch(try await Self.latestRelease(), to: dmg)
         }
         return try await installFromDiskImage(dmg, into: destination)
+        #endif
     }
+
+    #if os(macOS)
 
     /// An installed Zalo.app of exactly `version`: copying it saves the download.
     static func installedZalo(version: String) -> URL? {
@@ -351,6 +368,7 @@ struct ZaloRuntimeInstaller: Sendable {
             do { try process.run() } catch { continuation.resume(throwing: error) }
         }
     }
+    #endif
 }
 
 /// Reports the redirect instead of following it.

@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 
 /// Assembles the bridge the official renderer sees:
 /// - table-driven members → IPC channels answered by `ZaloMainProcess`;
@@ -54,21 +54,20 @@ enum BridgeImplementation {
         bridge.value("$znode.fs.constanst", ["F_OK": 0, "R_OK": 4, "W_OK": 2, "X_OK": 1])
 
         // $zelectronNative clipboard (Electron `clipboard`)
-        bridge.sync("$zelectronNative.clipboardText") { _ in NSPasteboard.general.string(forType: .string) ?? "" }
+        bridge.sync("$zelectronNative.clipboardText") { _ in PlatformServices.pasteboardString }
         bridge.sync("$zelectronNative.clipboardWriteText") { args in
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(args.string(0) ?? "", forType: .string)
+            PlatformServices.copy(args.string(0) ?? "")
             return nil
         }
         bridge.sync("$zelectronNative.clipboardFormats") { _ in
-            (NSPasteboard.general.types ?? []).map { type -> String in
+            PlatformServices.pasteboardTypes.map { type -> String in
                 switch type {
-                case .string: "text/plain"
-                case .html: "text/html"
-                case .png: "image/png"
-                case .tiff: "image/tiff"
-                case .fileURL: "text/uri-list"
-                default: type.rawValue
+                case "public.utf8-plain-text", "public.plain-text", "NSStringPboardType": "text/plain"
+                case "public.html": "text/html"
+                case "public.png": "image/png"
+                case "public.tiff": "image/tiff"
+                case "public.file-url": "text/uri-list"
+                default: type
                 }
             }
         }

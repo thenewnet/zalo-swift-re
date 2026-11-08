@@ -1,0 +1,55 @@
+# Olaz for iPhone. Generate the Xcode project with `xcodegen generate` (brew install xcodegen).
+# The macOS app is still built with SwiftPM (Package.swift, scripts/make-app.sh).
+name: OlazMobile
+options:
+  bundleIdPrefix: app.olaz
+  deploymentTarget:
+    iOS: "18.4"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ${OLAZ_TEAM_ID}
+targets:
+  OlazMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/Olaz
+        includes:
+          - "ZaloRuntime/**"
+          - "JSBridge/**"
+          - "Accounts/**"
+          - "Models.swift"
+          - "Theme.swift"
+        excludes:
+          - "ZaloRuntime/EngineProbe.swift"
+      - path: iOS/Sources
+      - path: iOS/Resources
+      - path: Sources/Olaz/HostScripts
+        type: folder
+        buildPhase: resources
+      - path: Sources/Olaz/JSModules
+        type: folder
+        buildPhase: resources
+      - path: Sources/Olaz/Resources
+        type: folder
+        buildPhase: resources
+      # Made on your Mac by scripts/fetch-zalo-runtime.sh (official Zalo code, never committed).
+      - path: iOS/ZaloRuntime
+        type: folder
+        buildPhase: resources
+        optional: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ${OLAZ_BUNDLE_ID}
+        PRODUCT_NAME: Olaz
+        INFOPLIST_FILE: iOS/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_STRICT_CONCURRENCY: complete
+        OTHER_SWIFT_FLAGS: "$(inherited) -DOLAZ_IOS"

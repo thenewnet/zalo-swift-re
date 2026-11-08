@@ -84,11 +84,13 @@ struct ConversationExtras: Equatable {
         return labels.first { $0.id == id }
     }
 
+#if os(macOS)
     /// The label `destination` filters the inbox by; nil for every other destination and for a label that no longer exists.
     func label(filteredBy destination: SidebarDestination) -> Label? {
         guard case .label(let id) = destination else { return nil }
         return labels.first { $0.id == id }
     }
+    #endif
 
     var tabs: [ConversationTypeFilter] { archivedEnabled ? [.focused, .other, .unread] : [.all, .unread] }
     var defaultTab: ConversationTypeFilter { archivedEnabled ? .focused : .all }

@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import Foundation
 import os
 
@@ -493,6 +493,26 @@ final class CallBridge {
 
 // MARK: - Production process
 
+#if !os(macOS)
+/// No call helper on iOS (`ZaloCall` is a macOS binary): launching always fails, so calls report "unavailable".
+@MainActor
+final class SystemCallProcess: CallProcess {
+    struct Unsupported: LocalizedError {
+        var errorDescription: String? { "Gọi thoại / video chưa hỗ trợ trên iPhone." }
+    }
+
+    static func launch(_ executable: URL, arguments: [String], log: @escaping (String) -> Void,
+                       onExit: @escaping @MainActor (Int32) -> Void) throws -> SystemCallProcess {
+        throw Unsupported()
+    }
+
+    var isRunning: Bool { false }
+    var pid: Int32? { nil }
+    func interrupt() {}
+    func terminate() {}
+    func forceKill() {}
+}
+#else
 /// `child_process.spawn(ZaloCall, [recvPath, sendPath])`. stdout / stderr are drained and never logged
 /// verbatim; a sanitized last line of stderr is logged on an abnormal exit.
 @MainActor
@@ -554,3 +574,5 @@ final class SystemCallProcess: CallProcess {
     func terminate() { process.terminate() }
     func forceKill() { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
 }
+
+#endif

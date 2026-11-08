@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 
 // Composer "+" actions — Ảnh hoặc Video, Tệp, Chụp màn hình, Danh thiếp, Nhắc hẹn — bridged to `HostScripts/composer-adapter.js`
 // (`window.__zaloCompose`). Picked files reach the page as browser `File`s: the adapter clicks a hidden file input and

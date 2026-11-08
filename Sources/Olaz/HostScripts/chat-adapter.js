@@ -860,7 +860,9 @@
     const ml = conv.msgList || {};
     return ml.hasMoreLocal !== false || (ml.hasMoreCloud !== false && ml.hasMoreCloud !== 0 && ml.hasMoreCloud !== undefined);
   };
-  const schedule = () => { if (!track.id || timer) return; timer = setTimeout(() => { timer = null; flush(); }, 150); };
+  const schedule = () => { if (!track.id || timer) return; timer = setTimeout(() => { timer = null; flush(); }, debounceMs()); };
+  // Long conversations (many loaded messages) re-map every message per flush: coalesce store updates more there.
+  const debounceMs = () => { const c = track.id && convOf(track.id); const n = (c && c.messages && c.messages.length) || 0; return n > 1500 ? 600 : n > 500 ? 300 : 150; };
   const flush = () => {
     const id = track.id;
     if (!id) return;

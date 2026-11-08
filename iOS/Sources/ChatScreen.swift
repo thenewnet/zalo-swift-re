@@ -21,6 +21,7 @@ struct ChatScreen: View {
             Divider()
             composer
         }
+        .modifier(CardNoticeToast(conversationId: conversationId))
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { engine.openConversation(conversationId) }

@@ -33,7 +33,7 @@ jobs:
           set +e
           swift test > test.log 2>&1
           status=$?
-          grep -E "✘|recorded an issue|XCTAssert|failed \(" test.log | head -60
+          grep -E "DIAG |✘|recorded an issue|XCTAssert|failed \(" test.log | head -60
           tail -3 test.log
           echo "--- resource bundles"
           find .build -name "libsignal-protocol.js" -not -path "*/checkouts/*" | head

@@ -35,7 +35,7 @@ enum ResourceLocator {
                 return url
             }
         }
-        #if SWIFT_PACKAGE
+        #if !OLAZ_IOS   // the iOS Xcode target has no Bundle.module
         // Development / `swift test` fallback.
         if let res = Bundle.module.resourceURL {
             let url = res.appendingPathComponent(subdirectory, isDirectory: true)

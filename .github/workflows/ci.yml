@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, ios-multi-account, ci-upstream-check]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS build + tests
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          latest=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+          ls -d /Applications/Xcode*.app || true
+          xcodebuild -version
+          swift --version
+      - name: Build
+        run: |
+          set +e
+          swift build > build.log 2>&1
+          status=$?
+          grep -E "error:" build.log | sort -u | head -150
+          grep -n -B3 -A40 "Stack dump\|fatal error encountered" build.log | head -200
+          tail -5 build.log
+          exit $status
+      - name: Test
+        run: swift test 2>&1 | tail -60

@@ -50,8 +50,9 @@ struct LoginScreen: View {
                 status
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Cách quét mã:").font(.subheadline.bold())
-                    Text("• Mở app Zalo của tài khoản này trên một điện thoại hoặc máy tính bảng khác, chọn biểu tượng quét mã QR và quét mã trên màn hình.")
-                    Text("• Hoặc bấm \"Lưu mã QR vào Ảnh\", rồi trong app Zalo chọn Quét mã QR → biểu tượng ảnh và chọn ảnh vừa lưu.")
+                    Text("• Mở app Zalo của tài khoản này trên một điện thoại khác, chọn biểu tượng quét mã QR và hướng camera thẳng vào màn hình iPhone này.")
+                    Text("• Mỗi mã chỉ dùng được khoảng 1 phút. Khi hết hạn, app tự tạo mã mới. Đừng gửi mã qua tin nhắn hay chụp lại để quét sau: đến lúc quét, mã đã hết hạn.")
+                    Text("• Chỉ có một điện thoại? Bấm \"Lưu mã QR vào Ảnh\", mở Zalo ngay, chọn Quét mã QR → biểu tượng ảnh và chọn ảnh vừa lưu, tất cả trong vòng 1 phút.")
                     Text("Zalo chỉ cho phép một phiên máy tính cho mỗi tài khoản: nếu tài khoản đang đăng nhập Zalo PC ở máy khác, phiên đó sẽ bị đăng xuất.")
                         .foregroundStyle(.secondary)
                 }
@@ -74,6 +75,14 @@ struct LoginScreen: View {
                     .padding(12)
                     .background(.white, in: RoundedRectangle(cornerRadius: 16))
                     .opacity(login.step == .expired ? 0.3 : 1)
+                if let shownAt = login.shownAt, login.step == .waitingScan {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let left = max(0, 60 - Int(context.date.timeIntervalSince(shownAt)))
+                        Text(left > 0 ? "Mã còn hiệu lực khoảng \(left) giây" : "Đang làm mới mã…")
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(left > 15 ? Color.secondary : Color.orange)
+                    }
+                }
                 HStack {
                     Button {
                         UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)

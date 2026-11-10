@@ -41,6 +41,8 @@ final class ZaloEngine {
         /// The server asked for a second scan (`error_code -20`, multi-layer QR for device linking): the QR on screen
         /// is QR2, which the phone must scan before the login can be confirmed.
         var isSecondQR = false
+        /// When the QR on screen was generated (the official page keeps it alive for about a minute).
+        var shownAt: Date?
     }
 
     struct Profile: Equatable {
@@ -162,6 +164,7 @@ final class ZaloEngine {
     @ObservationIgnored private var mainProcess: ZaloMainProcess?
     @ObservationIgnored private var platform: ZaloPlatform?
     @ObservationIgnored private var loginTimeout: Task<Void, Never>?
+    @ObservationIgnored private var autoQRRefreshes = 0
     @ObservationIgnored private var runtimeInstall: Task<Void, Never>?
 
     var isDebugRendererVisible = false {
@@ -315,8 +318,11 @@ final class ZaloEngine {
     @ObservationIgnored private(set) var isOnScreen = true
 
     /// Fresh QR (the official page regenerates on load).
-    func refreshQR() {
+    func refreshQR() { refreshQR(automatic: false) }
+
+    private func refreshQR(automatic: Bool) {
         guard let host, let mainProcess else { return }
+        if !automatic { autoQRRefreshes = 0 }
         phase = .login(LoginState())
         host.load(.login, query: mainProcess.pageQuery())
     }
@@ -396,8 +402,7 @@ final class ZaloEngine {
             // scan would do nothing. Only from waiting-scan — after an accepted login the page also shows this state.
             if state["invalid"] as? Bool == true, case .waitingScan = login.step {
                 loginTimeout?.cancel()
-                login.step = .expired
-                phase = .login(login)
+                expire(login)
                 return
             }
             if let qr = state["qr"] as? String, let png = Self.decodeDataURL(qr) {
@@ -413,6 +418,7 @@ final class ZaloEngine {
                 default:
                     break
                 }
+                login.shownAt = Date()
                 phase = .login(login)
                 scheduleExpiry()
             }
@@ -524,10 +530,39 @@ final class ZaloEngine {
         loginTimeout?.cancel()
         loginTimeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(100))
-            guard !Task.isCancelled, let self, case .login(var login) = self.phase,
+            guard !Task.isCancelled, let self, case .login(let login) = self.phase,
                   case .waitingScan = login.step else { return }
-            login.step = .expired
-            self.phase = .login(login)
+            self.expire(login)
+        }
+    }
+
+    /// The QR on screen is dead. On iPhone a new one is generated straight away while the account is on screen and
+    /// the app is in front (a few times, so a forgotten login screen does not poll forever); otherwise the screen
+    /// offers "Mã mới".
+    private func expire(_ login: LoginState) {
+        var login = login
+        #if os(iOS)
+        if isOnScreen, PlatformServices.appIsActive, autoQRRefreshes < 5 {
+            autoQRRefreshes += 1
+            refreshQR(automatic: true)
+            return
+        }
+        #endif
+        login.step = .expired
+        phase = .login(login)
+    }
+
+    /// The app comes back to the front: a QR that was shown before it left has most likely been dropped by the
+    /// server (the page cannot keep it alive while iOS suspends it), so a fresh one replaces it.
+    func refreshStaleQR() {
+        guard case .login(let login) = phase else { return }
+        switch login.step {
+        case .waitingScan, .expired:
+            if let shownAt = login.shownAt, Date().timeIntervalSince(shownAt) < 40, login.step == .waitingScan { return }
+            autoQRRefreshes = 0
+            refreshQR(automatic: true)
+        default:
+            break
         }
     }
 

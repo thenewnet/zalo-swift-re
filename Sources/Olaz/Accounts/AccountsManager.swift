@@ -140,7 +140,10 @@ final class AccountsManager {
     }
 
     func appWillEnterForeground() {
-        if let activeID { engines[activeID]?.setBackground(false) }
+        if let activeID, let engine = engines[activeID] {
+            engine.setBackground(false)
+            engine.refreshStaleQR()
+        }
         // Accounts that went to sleep (memory) or whose connection iOS dropped come back now.
         for account in accounts.sorted(by: { $0.lastUsed > $1.lastUsed }).prefix(liveLimit) {
             let engine = ensureEngine(account.id)

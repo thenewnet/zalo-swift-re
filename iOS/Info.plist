@@ -22,8 +22,23 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>UILaunchScreen</key>
-	<dict/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Dùng camera để chụp ảnh gửi trong Zalo.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dùng micro để ghi âm tin nhắn thoại.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Lưu mã QR đăng nhập và ảnh vào thư viện Ảnh.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Chọn ảnh và video để gửi trong Zalo.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Olaz chuyển giọng nói của bạn thành chữ trong ô nhập tin nhắn.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -34,23 +49,10 @@
 		<string>audio</string>
 		<string>fetch</string>
 	</array>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	<key>NSCameraUsageDescription</key>
-	<string>Dùng camera để chụp ảnh gửi trong Zalo.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Dùng micro để ghi âm tin nhắn thoại.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Chọn ảnh và video để gửi trong Zalo.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Lưu mã QR đăng nhập và ảnh vào thư viện Ảnh.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

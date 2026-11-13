@@ -15,6 +15,10 @@ struct ChatScreen: View {
     @State private var showFiles = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var uploading = false
+    @State private var dictation = SpeechDictation()
+    @State private var recorder = VoiceRecorder()
+    @State private var showPins = false
+    @State private var viewer: MediaViewerItem?
     @FocusState private var composerFocused: Bool
 
     private var messages: [ChatMessage] { engine.messages[conversationId] ?? [] }
@@ -24,10 +28,23 @@ struct ChatScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            pinnedBar
             messageList
             Divider()
             composer
         }
+        .fullScreenCover(item: $viewer) { item in MediaViewer(item: item) }
+        .sheet(isPresented: $showPins) { PinnedListSheet(engine: engine, conversationId: conversationId) }
+        .alert(engine.messageConfirm?.title ?? "", isPresented: Binding(
+            get: { engine.messageConfirm?.conversationId == conversationId },
+            set: { if !$0, let confirm = engine.messageConfirm { engine.answerMessageConfirm(confirm, ok: false) } }
+        ), presenting: engine.messageConfirm) { confirm in
+            Button(confirm.ok, role: confirm.destructive ? .destructive : nil) { engine.answerMessageConfirm(confirm, ok: true) }
+            Button(confirm.cancel, role: .cancel) { engine.answerMessageConfirm(confirm, ok: false) }
+        } message: { confirm in
+            Text(confirm.message)
+        }
+        .onDisappear { dictation.stop(); recorder.cancel() }
         .modifier(CardNoticeToast(conversationId: conversationId))
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -53,11 +70,20 @@ struct ChatScreen: View {
                             .padding(8)
                             .onAppear { loadOlder() }
                     }
-                    ForEach(messages) { message in
-                        MobileMessageRow(message: message, engine: engine,
-                                         onReply: { replyTo = $0; composerFocused = true },
-                                         onReact: { emoji, msg in engine.react(emoji, to: msg.id, in: conversationId) })
-                            .id(message.id)
+                    ForEach(ChatItem.group(messages)) { item in
+                        switch item {
+                        case .single(let message):
+                            MobileMessageRow(message: message, engine: engine,
+                                             onReply: { replyTo = $0; composerFocused = true },
+                                             onReact: { emoji, msg in engine.react(emoji, to: msg.id, in: conversationId) })
+                                .id(message.id)
+                        case .album(let photos):
+                            AlbumRow(photos: photos, engine: engine,
+                                     onOpen: { index in viewer = .photos(photos.map(\.photoURL), start: index) },
+                                     onReply: { replyTo = $0; composerFocused = true },
+                                     onReact: { emoji, msg in engine.react(emoji, to: msg.id, in: conversationId) })
+                                .id(photos.last?.id ?? item.id)
+                        }
                     }
                     if let typing = engine.typing[conversationId] {
                         Text("\(typing) đang soạn tin…")
@@ -104,7 +130,16 @@ struct ChatScreen: View {
                 }
                 .padding(.horizontal, 12).padding(.top, 6)
             }
-            inputRow
+            if let problem = dictation.error ?? recorder.error {
+                Text(problem).font(.caption).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.top, 6)
+            }
+            if recorder.recording {
+                recordingBar
+            } else {
+                inputRow
+            }
         }
         .background(.bar)
     }
@@ -114,6 +149,7 @@ struct ChatScreen: View {
             Menu {
                 Button { showPhotos = true } label: { Label("Ảnh hoặc video", systemImage: "photo.on.rectangle") }
                 Button { showFiles = true } label: { Label("Tệp", systemImage: "doc") }
+                Button { Task { await recorder.start() } } label: { Label("Ghi âm", systemImage: "mic") }
             } label: {
                 Image(systemName: "plus.circle.fill")
                     .font(.system(size: 26))
@@ -124,10 +160,21 @@ struct ChatScreen: View {
             TextField("Nhập tin nhắn", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
+                .padding(.leading, 12)
+                .padding(.trailing, 36)
                 .padding(.vertical, 8)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
                 .focused($composerFocused)
+                .overlay(alignment: .trailing) {
+                    Button { toggleDictation() } label: {
+                        Image(systemName: dictation.listening ? "stop.circle.fill" : "mic.fill")
+                            .foregroundStyle(dictation.listening ? Color.red : Color.secondary)
+                            .symbolEffect(.pulse, isActive: dictation.listening)
+                            .frame(width: 32, height: 32)
+                    }
+                    .padding(.trailing, 4)
+                    .accessibilityLabel(dictation.listening ? "Dừng nhập bằng giọng nói" : "Nhập bằng giọng nói")
+                }
             Button {
                 send()
             } label: {
@@ -139,6 +186,62 @@ struct ChatScreen: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    private var recordingBar: some View {
+        HStack(spacing: 12) {
+            Button(role: .destructive) { recorder.cancel() } label: {
+                Image(systemName: "trash").font(.system(size: 18)).frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Huỷ ghi âm")
+            Image(systemName: "waveform").symbolEffect(.variableColor.iterative, isActive: true).foregroundStyle(.red)
+            Text("Đang ghi âm \(MobileMessageRow.clock(Int(recorder.elapsed)))").font(.subheadline.monospacedDigit())
+            Spacer()
+            Button {
+                if let url = recorder.finish() { Task { await sendFiles([url], copy: false) } }
+            } label: {
+                Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Gửi ghi âm")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    /// Pinned messages of the conversation: the newest one, tap for the whole list.
+    @ViewBuilder
+    private var pinnedBar: some View {
+        if let list = engine.pins[conversationId], let first = list.items.first {
+            Button { showPins = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "pin.fill").foregroundStyle(Color.accentColor)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(first.title.isEmpty ? first.label : first.title).font(.subheadline).lineLimit(1).foregroundStyle(.primary)
+                        Text(first.sender.isEmpty ? first.label : "\(first.label) của \(first.sender)")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    if list.items.count > 1 {
+                        Text("+\(list.items.count - 1)").font(.caption.weight(.semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color(.tertiarySystemFill), in: Capsule())
+                    }
+                    Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(.bar)
+            }
+            .buttonStyle(.plain)
+            .overlay(alignment: .bottom) { Divider() }
+        }
+    }
+
+    private func toggleDictation() {
+        if dictation.listening { dictation.stop(); return }
+        let base = draft.isEmpty || draft.hasSuffix(" ") ? draft : draft + " "
+        Task {
+            await dictation.start { text in draft = base + text }
+        }
     }
 
     private func loadOlder() {
@@ -192,10 +295,10 @@ struct ChatScreen: View {
         report(await engine.sendMedia(urls, to: conversationId))
     }
 
-    private func sendFiles(_ picked: [URL]) async {
+    private func sendFiles(_ picked: [URL], copy: Bool = true) async {
         uploading = true
         defer { uploading = false }
-        let urls = picked.compactMap { Outbox.copy($0) }
+        let urls = copy ? picked.compactMap { Outbox.copy($0) } : picked
         guard !urls.isEmpty else {
             CardActionCenter.shared.show("Không đọc được tệp đã chọn.", in: conversationId)
             return
@@ -428,6 +531,13 @@ struct MobileMessageRow: View {
             }
             .controlGroupStyle(.compactMenu)
             Button { onReply(message) } label: { Label("Trả lời", systemImage: "arrowshape.turn.up.left") }
+            if let list = engine.pins[message.conversationId], list.canPin {
+                if list.items.contains(where: { $0.message(in: [message]) != nil }) {
+                    Button { engine.requestUnpin(message) } label: { Label("Bỏ ghim tin nhắn", systemImage: "pin.slash") }
+                } else {
+                    Button { engine.pin(message) } label: { Label("Ghim tin nhắn", systemImage: "pin") }
+                }
+            }
         }
         if !message.text.isEmpty {
             Button { PlatformServices.copy(message.text) } label: { Label("Sao chép", systemImage: "doc.on.doc") }

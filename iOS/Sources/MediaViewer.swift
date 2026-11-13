@@ -4,24 +4,27 @@ import UIKit
 
 /// What the full-screen viewer shows.
 enum MediaViewerItem: Identifiable {
-    case image(URL?)
+    /// One or more photos (an album opens on the tapped one and swipes between them).
+    case photos([URL?], start: Int)
     case video(URL)
+
+    static func image(_ url: URL?) -> MediaViewerItem { .photos([url], start: 0) }
 
     var id: String {
         switch self {
-        case .image(let url): "image|" + (url?.absoluteString ?? "")
+        case .photos(let urls, let start): "photos|\(start)|" + urls.map { $0?.absoluteString ?? "" }.joined(separator: ",")
         case .video(let url): "video|" + url.absoluteString
         }
     }
 }
 
-/// Full-screen photo (pinch / double-tap to zoom, drag down to close, save and share) or video player.
+/// Full-screen photos (swipe between them, pinch / double-tap to zoom, drag down to close, save and share) or video.
 struct MediaViewer: View {
     let item: MediaViewerItem
     @Environment(\.dismiss) private var dismiss
-    @State private var image: UIImage?
-    @State private var failed = false
-    @State private var saved = false
+    @State private var page = 0
+    @State private var images: [Int: UIImage] = [:]
+    @State private var saved: Set<Int> = []
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
@@ -38,18 +41,23 @@ struct MediaViewer: View {
         switch item {
         case .video(let url):
             VideoPlayerView(url: url).ignoresSafeArea()
-        case .image(let url):
-            Group {
-                if let image {
-                    ZoomableImage(image: image, onSwipeDown: { dismiss() }, dragOffset: $dragOffset)
-                } else if failed {
-                    Label("Không tải được ảnh", systemImage: "exclamationmark.triangle").foregroundStyle(.white)
-                } else {
-                    ProgressView().tint(.white)
+        case .photos(let urls, let start):
+            TabView(selection: $page) {
+                ForEach(urls.indices, id: \.self) { index in
+                    PhotoPage(url: urls[index], onLoad: { images[index] = $0 },
+                              onSwipeDown: { dismiss() }, dragOffset: $dragOffset)
+                        .tag(index)
                 }
             }
-            .task { await load(url) }
+            .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .automatic : .never))
+            .ignoresSafeArea()
+            .onAppear { page = start }
         }
+    }
+
+    private var photoCount: Int {
+        if case .photos(let urls, _) = item { return urls.count }
+        return 0
     }
 
     private var controls: some View {
@@ -60,12 +68,16 @@ struct MediaViewer: View {
                         .frame(width: 40, height: 40).background(.ultraThinMaterial, in: Circle())
                 }
                 Spacer()
-                if let image {
+                if photoCount > 1 {
+                    Text("\(page + 1)/\(photoCount)").font(.subheadline.monospacedDigit())
+                    Spacer()
+                }
+                if let image = images[page] {
                     Button {
                         UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                        saved = true
+                        saved.insert(page)
                     } label: {
-                        Image(systemName: saved ? "checkmark" : "square.and.arrow.down")
+                        Image(systemName: saved.contains(page) ? "checkmark" : "square.and.arrow.down")
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 40, height: 40).background(.ultraThinMaterial, in: Circle())
                     }
@@ -83,14 +95,37 @@ struct MediaViewer: View {
         }
         .opacity(dragOffset == 0 ? 1 : 0)
     }
+}
 
-    private func load(_ url: URL?) async {
-        guard let url else { failed = true; return }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            if let decoded = UIImage(data: data) { image = decoded } else { failed = true }
-        } catch {
-            failed = true
+/// One photo of the viewer: downloads it, then shows it zoomable.
+struct PhotoPage: View {
+    let url: URL?
+    let onLoad: (UIImage) -> Void
+    let onSwipeDown: () -> Void
+    @Binding var dragOffset: CGFloat
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                ZoomableImage(image: image, onSwipeDown: onSwipeDown, dragOffset: $dragOffset)
+            } else if failed {
+                Label("Không tải được ảnh", systemImage: "exclamationmark.triangle").foregroundStyle(.white)
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            guard image == nil else { return }
+            guard let url else { failed = true; return }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                if let decoded = UIImage(data: data) { image = decoded; onLoad(decoded) } else { failed = true }
+            } catch {
+                failed = true
+            }
         }
     }
 }

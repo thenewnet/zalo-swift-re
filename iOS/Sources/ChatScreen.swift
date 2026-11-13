@@ -1,5 +1,7 @@
+import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// One conversation: messages from the official client (newest at the bottom), older pages on scroll, a composer.
 struct ChatScreen: View {
@@ -8,6 +10,11 @@ struct ChatScreen: View {
     @State private var draft = ""
     @State private var sending = false
     @State private var requestedOlderAt: String?
+    @State private var replyTo: ChatMessage?
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var uploading = false
     @FocusState private var composerFocused: Bool
 
     private var messages: [ChatMessage] { engine.messages[conversationId] ?? [] }
@@ -24,6 +31,15 @@ struct ChatScreen: View {
         .modifier(CardNoticeToast(conversationId: conversationId))
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 20, matching: .any(of: [.images, .videos]))
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task { await sendPhotos(items) }
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { Task { await sendFiles(urls) } }
+        }
         .onAppear { engine.openConversation(conversationId) }
         .onDisappear { if engine.openConversationId == conversationId { engine.closeConversation() } }
     }
@@ -38,7 +54,9 @@ struct ChatScreen: View {
                             .onAppear { loadOlder() }
                     }
                     ForEach(messages) { message in
-                        MobileMessageRow(message: message, engine: engine)
+                        MobileMessageRow(message: message, engine: engine,
+                                         onReply: { replyTo = $0; composerFocused = true },
+                                         onReact: { emoji, msg in engine.react(emoji, to: msg.id, in: conversationId) })
                             .id(message.id)
                     }
                     if let typing = engine.typing[conversationId] {
@@ -61,7 +79,48 @@ struct ChatScreen: View {
     }
 
     private var composer: some View {
+        VStack(spacing: 0) {
+            if let replyTo {
+                HStack(spacing: 8) {
+                    Rectangle().fill(Color.accentColor).frame(width: 3)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Trả lời \(replyTo.isMine ? "chính mình" : replyTo.senderName)")
+                            .font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                        Text(MobileMessageRow.preview(of: replyTo)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button { self.replyTo = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .accessibilityLabel("Huỷ trả lời")
+                }
+                .frame(height: 36)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+            }
+            if uploading {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Đang gửi tệp…").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.top, 6)
+            }
+            inputRow
+        }
+        .background(.bar)
+    }
+
+    private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Menu {
+                Button { showPhotos = true } label: { Label("Ảnh hoặc video", systemImage: "photo.on.rectangle") }
+                Button { showFiles = true } label: { Label("Tệp", systemImage: "doc") }
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 26))
+                    .frame(width: 36, height: 36)
+            }
+            .disabled(uploading)
+            .accessibilityLabel("Đính kèm")
             TextField("Nhập tin nhắn", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .textFieldStyle(.plain)
@@ -80,7 +139,6 @@ struct ChatScreen: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.bar)
     }
 
     private func loadOlder() {
@@ -96,10 +154,59 @@ struct ChatScreen: View {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         sending = true
         draft = ""
+        let quoted = replyTo
+        replyTo = nil
         Task {
-            let ok = await engine.sendText(text, to: conversationId)
-            if !ok { draft = text }
+            let ok = await engine.sendText(text, to: conversationId, quoting: quoted?.id)
+            if !ok { draft = text; replyTo = quoted }
             sending = false
+        }
+    }
+
+    // MARK: Attachments
+
+    /// Copies the picked photos / videos into a temporary folder (the page reads them from there) and sends them
+    /// through the official photo path.
+    private func sendPhotos(_ items: [PhotosPickerItem]) async {
+        uploading = true
+        defer { uploading = false }
+        var urls: [URL] = []
+        for item in items {
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }),
+               let movie = try? await item.loadTransferable(type: PickedMovie.self) {
+                urls.append(movie.url)
+            } else if let data = try? await item.loadTransferable(type: Data.self) {
+                let type = item.supportedContentTypes.first
+                // HEIC and other camera formats go out as JPEG, which every Zalo client can show; GIF stays animated.
+                if type?.conforms(to: .gif) != true, let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.9) {
+                    if let url = Outbox.write(jpeg, name: "IMG_\(urls.count + 1).jpg") { urls.append(url) }
+                } else if let url = Outbox.write(data, name: "IMG_\(urls.count + 1).\(type?.preferredFilenameExtension ?? "jpg")") {
+                    urls.append(url)
+                }
+            }
+        }
+        guard !urls.isEmpty else {
+            CardActionCenter.shared.show("Không đọc được ảnh đã chọn.", in: conversationId)
+            return
+        }
+        report(await engine.sendMedia(urls, to: conversationId))
+    }
+
+    private func sendFiles(_ picked: [URL]) async {
+        uploading = true
+        defer { uploading = false }
+        let urls = picked.compactMap { Outbox.copy($0) }
+        guard !urls.isEmpty else {
+            CardActionCenter.shared.show("Không đọc được tệp đã chọn.", in: conversationId)
+            return
+        }
+        report(await engine.sendFiles(urls, to: conversationId))
+    }
+
+    private func report(_ outcome: ComposerOutcome) {
+        switch outcome {
+        case .failed(let text), .pending(let text): CardActionCenter.shared.show(text, in: conversationId)
+        case .done, .cancelled: break
         }
     }
 }
@@ -109,8 +216,13 @@ struct ChatScreen: View {
 struct MobileMessageRow: View {
     let message: ChatMessage
     let engine: ZaloEngine
+    var onReply: (ChatMessage) -> Void = { _ in }
+    var onReact: (String, ChatMessage) -> Void = { _, _ in }
     @Environment(\.openURL) private var openURL
     @State private var viewer: MediaViewerItem?
+    @State private var contact: ChatMessage.ContactCard?
+
+    static let reactionEmojis = ["❤️", "👍", "😆", "😮", "😢", "😡"]
 
     var body: some View {
         if message.kind.isStandalone || message.kind == .system {
@@ -130,17 +242,21 @@ struct MobileMessageRow: View {
                     if !message.isMine, !message.senderName.isEmpty {
                         Text(message.senderName).font(.caption2).foregroundStyle(.secondary)
                     }
+                    if let quote = message.quote {
+                        quoteView(quote)
+                    }
                     bubble
                         .contextMenu { menu }
                     if !message.reactions.isEmpty {
-                        Text(message.reactions.map(\.icon.emoji).joined())
-                            .font(.caption)
+                        reactionChips
                     }
                 }
                 if !message.isMine { Spacer(minLength: 48) }
             }
             .padding(.horizontal, 10)
             .fullScreenCover(item: $viewer) { item in MediaViewer(item: item) }
+            .sheet(item: $contact) { card in ContactCardSheet(card: card, engine: engine) }
+
         }
     }
 
@@ -230,6 +346,23 @@ struct MobileMessageRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .buttonStyle(.plain)
+        case .contactCard(let card):
+            Button { contact = card } label: {
+                HStack(spacing: 10) {
+                    AccountAvatar(name: card.name, url: card.avatar, size: 44)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(card.name.isEmpty ? "Danh thiếp" : card.name).foregroundStyle(.primary).lineLimit(1)
+                        Text(card.isOfficialAccount ? "Tài khoản OA" : (card.phone.isEmpty ? "Danh thiếp Zalo" : card.phone))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+                .padding(10)
+                .frame(width: 240, alignment: .leading)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
         case .location(let info):
             Button { openMap(info) } label: {
                 HStack(spacing: 10) {
@@ -285,6 +418,17 @@ struct MobileMessageRow: View {
 
     @ViewBuilder
     private var menu: some View {
+        if canInteract {
+            ControlGroup {
+                ForEach(Self.reactionEmojis, id: \.self) { emoji in
+                    Button { onReact(emoji, message) } label: {
+                        Text(myReactions.contains(emoji) ? "\(emoji)✓" : emoji)
+                    }
+                }
+            }
+            .controlGroupStyle(.compactMenu)
+            Button { onReply(message) } label: { Label("Trả lời", systemImage: "arrowshape.turn.up.left") }
+        }
         if !message.text.isEmpty {
             Button { PlatformServices.copy(message.text) } label: { Label("Sao chép", systemImage: "doc.on.doc") }
         }
@@ -296,6 +440,55 @@ struct MobileMessageRow: View {
         if case .photo(let url, _, _) = message.kind, url != nil {
             Button { viewer = .image(url) } label: { Label("Xem ảnh", systemImage: "photo") }
         }
+    }
+
+    private var canInteract: Bool {
+        switch message.kind {
+        case .recalled, .system, .notice, .placeholder: false
+        default: !message.id.isEmpty
+        }
+    }
+
+    private var myReactions: Set<String> { Set(message.reactions.filter(\.includesMe).map(\.emoji)) }
+
+    /// Reaction chips under the bubble; tapping one adds or removes my reaction of that kind.
+    private var reactionChips: some View {
+        HStack(spacing: 4) {
+            ForEach(message.reactions) { reaction in
+                Button { onReact(reaction.emoji, message) } label: {
+                    HStack(spacing: 2) {
+                        Text(reaction.emoji)
+                        if reaction.count > 1 { Text("\(reaction.count)").font(.caption2.monospacedDigit()) }
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(reaction.includesMe ? Color.accentColor.opacity(0.2) : Color(.tertiarySystemFill), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(reaction.tooltip ?? reaction.emoji)
+            }
+        }
+    }
+
+    private func quoteView(_ quote: ChatMessage.Quote) -> some View {
+        HStack(spacing: 6) {
+            Rectangle().fill(Color.accentColor).frame(width: 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(quote.senderName).font(.caption2.weight(.semibold))
+                Text(quote.text).font(.caption2).lineLimit(2)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: 240, alignment: .leading)
+    }
+
+    /// One line describing a message (reply banner).
+    static func preview(of message: ChatMessage) -> String {
+        if !message.text.isEmpty { return message.text }
+        return summary(message.kind)
     }
 
     /// The link a long-press acts on: the card's URL, the media's, or the first link in the text.
@@ -362,8 +555,10 @@ struct MobileMessageRow: View {
 
     static func clock(_ seconds: Int) -> String { String(format: "%d:%02d", seconds / 60, seconds % 60) }
 
-    private var summary: String {
-        switch message.kind {
+    private var summary: String { Self.summary(message.kind) }
+
+    static func summary(_ kind: ChatMessage.Kind) -> String {
+        switch kind {
         case .text: ""
         case .photo: "[Hình ảnh]"
         case .sticker: "[Sticker]"
